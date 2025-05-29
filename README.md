@@ -1,9 +1,3 @@
-Trabalho Final de Sistemas Operacionais 
-
-Arena dos Processos - Batalha dos Robôs Autônomos 
-
-(Grupo de até 4 estudantes)
-
 1. Objetivo
 
 Projetar um jogo em modo texto (ASCII) totalmente distribuído sobre processos e threads locais. O tabuleiro de $40\times20$, as barreiras, as baterias e os metadados dos robôs ficam em memória compartilhada. Cada robô (processo) lê/escreve diretamente nesse segmento, usando mecanismos de sincronização para evitar corrupção, corridas e deadlocks. Quando dois robôs se encontram, eles mesmos resolvem o duelo dentro de uma região crítica protegida.
