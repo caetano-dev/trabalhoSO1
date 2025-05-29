@@ -1,6 +1,9 @@
 import os
 import sys
 import threading
+import multiprocessing
+import queue
+import time
 
 import curses
 import random
@@ -25,14 +28,15 @@ class Battery:
             return self.energy_boost
         return 0
 
-class Robot(threading.Thread):
-    def __init__(self, robot_id, x, y, arena, is_player=False):
+class Robot(multiprocessing.Process):
+    def __init__(self, robot_id, x, y, is_player=False, command_queue=None, response_queue=None):
         super().__init__()
         self.id = robot_id
         self.x = x
         self.y = y
-        self.arena = arena
         self.is_player = is_player
+        self.command_queue = command_queue
+        self.response_queue = response_queue
 
         self.F = random.randint(1, 10)  # Força
         self.E = random.randint(10, 100)  # Energia
@@ -41,26 +45,56 @@ class Robot(threading.Thread):
 
         self.direction = (0, 0)
         self.running = True
-        self.lock = threading.Lock()
 
     def set_direction(self, dx, dy):
-        with self.lock:
-            self.direction = (dx, dy)
+        self.direction = (dx, dy)
 
     def run(self):
         while self.running and self.status == 'alive':
-            if self.is_player:
-                with self.lock:
+            try:
+                # pega comandos do processo principal
+                try:
+                    command = self.command_queue.get_nowait()
+                    if command['type'] == 'stop':
+                        self.running = False
+                        break
+                    elif command['type'] == 'set_direction':
+                        self.direction = (command['dx'], command['dy'])
+                    elif command['type'] == 'update_position':
+                        self.x = command['x']
+                        self.y = command['y']
+                    elif command['type'] == 'update_energy':
+                        self.E = command['energy']
+                except queue.Empty:
+                    pass
+
+                if self.is_player:
                     dx, dy = self.direction
-                if dx != 0 or dy != 0:
-                    self.arena.move_robot(self, dx, dy)
-                    self.set_direction(0, 0)
-            else:
-                for _ in range(self.V):
-                    dx, dy = random.choice([(0,1),(0,-1),(1,0),(-1,0)])
-                    self.arena.move_robot(self, dx, dy)
-                    threading.Event().wait(0.05)
-            threading.Event().wait(0.05)
+                    if dx != 0 or dy != 0:
+                        # manda comandos para mover
+                        move_request = {
+                            'type': 'move_request',
+                            'robot_id': self.id,
+                            'dx': dx,
+                            'dy': dy
+                        }
+                        self.response_queue.put(move_request)
+                        self.direction = (0, 0)
+                else:
+                    for _ in range(self.V):
+                        dx, dy = random.choice([(0,1),(0,-1),(1,0),(-1,0)])
+                        move_request = {
+                            'type': 'move_request',
+                            'robot_id': self.id,
+                            'dx': dx,
+                            'dy': dy
+                        }
+                        self.response_queue.put(move_request)
+                        time.sleep(0.05)
+                
+                time.sleep(0.05)
+            except KeyboardInterrupt:
+                break
 
 class Arena:
     def __init__(self, num_robots=4, num_batteries=8):
@@ -71,12 +105,26 @@ class Arena:
                     self.grid[y][x] = BORDER_SYMBOL
         
         self.robots = []
+        self.robot_processes = []
+        self.robot_data = {}  
         self.batteries = []
+        
+        self.command_queues = {}
+        self.response_queue = multiprocessing.Queue()
 
         # Criar robo do jogador
         player_x, player_y = GRID_WIDTH // 2, GRID_HEIGHT // 2
-        player_robot = Robot(0, player_x, player_y, self, is_player=True)
-        self.robots.append(player_robot)
+        player_command_queue = multiprocessing.Queue()
+        self.command_queues[0] = player_command_queue
+        
+        player_robot = Robot(0, player_x, player_y, is_player=True, 
+                           command_queue=player_command_queue, 
+                           response_queue=self.response_queue)
+        self.robot_processes.append(player_robot)
+        self.robot_data[0] = {
+            'x': player_x, 'y': player_y, 'E': player_robot.E, 
+            'F': player_robot.F, 'V': player_robot.V, 'status': 'alive', 'is_player': True
+        }
         self.grid[player_y][player_x] = PLAYER_SYMBOL
 
         # Criar robôs adversários
@@ -86,8 +134,18 @@ class Arena:
                 y = random.randint(1, GRID_HEIGHT-2)
                 if self.grid[y][x] == EMPTY_SYMBOL:
                     break
-            bot_robot = Robot(i, x, y, self)
-            self.robots.append(bot_robot)
+            
+            command_queue = multiprocessing.Queue()
+            self.command_queues[i] = command_queue
+            
+            bot_robot = Robot(i, x, y, is_player=False,
+                            command_queue=command_queue,
+                            response_queue=self.response_queue)
+            self.robot_processes.append(bot_robot)
+            self.robot_data[i] = {
+                'x': x, 'y': y, 'E': bot_robot.E, 
+                'F': bot_robot.F, 'V': bot_robot.V, 'status': 'alive', 'is_player': False
+            }
             self.grid[y][x] = str(i)
 
         # Criar baterias
@@ -101,14 +159,32 @@ class Arena:
             self.batteries.append(battery)
             self.grid[y][x] = BATTERY_SYMBOL
 
-        for robot in self.robots:
-            robot.start()
+        for robot_process in self.robot_processes:
+            robot_process.start()
 
-    def move_robot(self, robot, dx, dy):
-        if robot.status != 'alive':
+    def process_robot_messages(self):
+        try:
+            while True:
+                try:
+                    message = self.response_queue.get_nowait()
+                    if message['type'] == 'move_request':
+                        robot_id = message['robot_id']
+                        dx, dy = message['dx'], message['dy']
+                        self.move_robot(robot_id, dx, dy)
+                except queue.Empty:
+                    break
+        except:
+            pass
+
+    def move_robot(self, robot_id, dx, dy):
+        robot_data = self.robot_data[robot_id]
+        if robot_data['status'] != 'alive':
             return
-        new_x = robot.x + dx
-        new_y = robot.y + dy
+            
+        old_x, old_y = robot_data['x'], robot_data['y']
+        new_x = old_x + dx
+        new_y = old_y + dy
+        
         if (0 < new_x < GRID_WIDTH-1 and 0 < new_y < GRID_HEIGHT-1):
             target_cell = self.grid[new_y][new_x]
             
@@ -117,21 +193,37 @@ class Arena:
                     for battery in self.batteries:
                         if battery.x == new_x and battery.y == new_y and not battery.collected:
                             energy_gained = battery.collect()
-                            robot.E += energy_gained
+                            robot_data['E'] += energy_gained
+                            # atualiza energia do robô
+                            self.command_queues[robot_id].put({
+                                'type': 'update_energy',
+                                'energy': robot_data['E']
+                            })
                             self.respawn_battery(battery)
                             break
                 
-                self.grid[robot.y][robot.x] = EMPTY_SYMBOL
+                self.grid[old_y][old_x] = EMPTY_SYMBOL
                 
-                robot.x = new_x
-                robot.y = new_y
-                self.grid[robot.y][robot.x] = PLAYER_SYMBOL if robot.is_player else str(robot.id)
+                robot_data['x'] = new_x
+                robot_data['y'] = new_y
+                
+                self.command_queues[robot_id].put({
+                    'type': 'update_position',
+                    'x': new_x,
+                    'y': new_y
+                })
+                
+                self.grid[new_y][new_x] = PLAYER_SYMBOL if robot_data['is_player'] else str(robot_id)
+
+    def set_player_direction(self, dx, dy):
+        self.command_queues[0].put({
+            'type': 'set_direction',
+            'dx': dx,
+            'dy': dy
+        })
 
     def get_robot_by_id(self, robot_id):
-        for robot in self.robots:
-            if robot.id == robot_id:
-                return robot
-        return None
+        return self.robot_data.get(robot_id)
 
     def respawn_battery(self, collected_battery):
         while True:
@@ -155,8 +247,8 @@ class Arena:
             if len(row) <= max_x - 1:
                 stdscr.addstr(y, 0, row)
         
-        player_robot = self.robots[0] 
-        energy_info = f"Energia do jogador: {player_robot.E}"
+        player_data = self.robot_data[0] 
+        energy_info = f"Energia do jogador: {player_data['E']}"
         if GRID_HEIGHT + 1 < max_y and len(energy_info) <= max_x - 1:
             stdscr.addstr(GRID_HEIGHT + 1, 0, energy_info)
         
@@ -166,30 +258,41 @@ class Arena:
         
         stdscr.refresh()
 
+    def cleanup(self):
+        for robot_id in self.command_queues:
+            self.command_queues[robot_id].put({'type': 'stop'})
+        
+        for process in self.robot_processes:
+            process.join(timeout=1)
+            if process.is_alive():
+                process.terminate()
+
 def main(stdscr):
     arena = Arena(num_robots=5) 
     stdscr.nodelay(True)
     stdscr.clear()
     try:
         while True:
+            arena.process_robot_messages()
+            
             arena.display(stdscr)
+            
             key = stdscr.getch()
             if key == curses.KEY_UP:
-                arena.robots[0].set_direction(0, -1)
+                arena.set_player_direction(0, -1)
             elif key == curses.KEY_DOWN:
-                arena.robots[0].set_direction(0, 1)
+                arena.set_player_direction(0, 1)
             elif key == curses.KEY_LEFT:
-                arena.robots[0].set_direction(-1, 0)
+                arena.set_player_direction(-1, 0)
             elif key == curses.KEY_RIGHT:
-                arena.robots[0].set_direction(1, 0)
+                arena.set_player_direction(1, 0)
             elif key == ord('q'):
                 break
             curses.napms(50)
     finally:
-        for robot in arena.robots:
-            robot.running = False
-        for robot in arena.robots:
-            robot.join()
+        arena.cleanup()
 
 if __name__ == "__main__":
+    # para macos ou windows
+    multiprocessing.set_start_method('spawn', force=True)
     curses.wrapper(main)
