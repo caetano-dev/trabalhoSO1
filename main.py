@@ -14,6 +14,7 @@ PLAYER_SYMBOL = 'P'
 BORDER_SYMBOL = '#'
 EMPTY_SYMBOL = ' '
 BATTERY_SYMBOL = 'B'
+ENERGY_LIMIT = 100
 
 class Battery:
     def __init__(self, x, y):
@@ -21,7 +22,7 @@ class Battery:
         self.y = y
         self.energy_boost = 20
         self.collected = False
-    
+
     def collect(self):
         if not self.collected:
             self.collected = True
@@ -45,11 +46,41 @@ class Robot(multiprocessing.Process):
 
         self.direction = (0, 0)
         self.running = True
+        # Note: threading.Lock will be created in run() method to avoid pickling issues
+
+    def housekeeping(self):
+        while self.running and self.status == 'alive':
+            try:
+                with self.energy_lock:
+                    # Consome energia baseado na velocidade e força do robô
+                    energy_consumption = max(1, (self.V + self.F) // 4)
+                    self.E = max(0, self.E - energy_consumption)
+                    
+                    # Se a energia acabar, o robô morre
+                    if self.E <= 0:
+                        self.status = 'dead'
+                        # Notifica o processo principal sobre a morte do robô
+                        death_notification = {
+                            'type': 'robot_death',
+                            'robot_id': self.id
+                        }
+                        self.response_queue.put(death_notification)
+                        break
+                
+                # Pausa de 1 segundo entre atualizações de energia
+                time.sleep(1.0)
+            except:
+                break
 
     def set_direction(self, dx, dy):
         self.direction = (dx, dy)
 
     def run(self):
+        self.energy_lock = threading.Lock()
+        
+        housekeeping_thread = threading.Thread(target=self.housekeeping, daemon=True)
+        housekeeping_thread.start()
+        
         while self.running and self.status == 'alive':
             try:
                 # pega comandos do processo principal
@@ -64,7 +95,8 @@ class Robot(multiprocessing.Process):
                         self.x = command['x']
                         self.y = command['y']
                     elif command['type'] == 'update_energy':
-                        self.E = command['energy']
+                        with self.energy_lock:
+                            self.E = command['energy']
                 except queue.Empty:
                     pass
 
@@ -171,10 +203,21 @@ class Arena:
                         robot_id = message['robot_id']
                         dx, dy = message['dx'], message['dy']
                         self.move_robot(robot_id, dx, dy)
+                    elif message['type'] == 'robot_death':
+                        robot_id = message['robot_id']
+                        self.handle_robot_death(robot_id)
                 except queue.Empty:
                     break
         except:
             pass
+
+    def handle_robot_death(self, robot_id):
+        robot_data = self.robot_data[robot_id]
+        robot_data['status'] = 'dead'
+        
+        # Remove o robô do grid
+        old_x, old_y = robot_data['x'], robot_data['y']
+        self.grid[old_y][old_x] = EMPTY_SYMBOL
 
     def move_robot(self, robot_id, dx, dy):
         robot_data = self.robot_data[robot_id]
@@ -193,7 +236,10 @@ class Arena:
                     for battery in self.batteries:
                         if battery.x == new_x and battery.y == new_y and not battery.collected:
                             energy_gained = battery.collect()
-                            robot_data['E'] += energy_gained
+                            if energy_gained > 0:
+                                robot_data['E'] += energy_gained
+                                if robot_data['E'] > ENERGY_LIMIT:
+                                    robot_data['E'] = ENERGY_LIMIT
                             # atualiza energia do robô
                             self.command_queues[robot_id].put({
                                 'type': 'update_energy',
@@ -248,13 +294,18 @@ class Arena:
                 stdscr.addstr(y, 0, row)
         
         player_data = self.robot_data[0] 
-        energy_info = f"Energia do jogador: {player_data['E']}"
+        energy_info = f"Energia do jogador: {player_data['E']} | Status: {player_data['status']}"
         if GRID_HEIGHT + 1 < max_y and len(energy_info) <= max_x - 1:
             stdscr.addstr(GRID_HEIGHT + 1, 0, energy_info)
         
+        alive_robots = sum(1 for robot_data in self.robot_data.values() if robot_data['status'] == 'alive')
+        status_info = f"Robôs vivos: {alive_robots}/{len(self.robot_data)}"
+        if GRID_HEIGHT + 2 < max_y and len(status_info) <= max_x - 1:
+            stdscr.addstr(GRID_HEIGHT + 2, 0, status_info)
+        
         controls = "Use as setas para mover. Q para sair."
-        if GRID_HEIGHT + 2 < max_y and len(controls) <= max_x - 1:
-            stdscr.addstr(GRID_HEIGHT + 2, 0, controls)
+        if GRID_HEIGHT + 3 < max_y and len(controls) <= max_x - 1:
+            stdscr.addstr(GRID_HEIGHT + 3, 0, controls)
         
         stdscr.refresh()
 
