@@ -243,7 +243,7 @@ class Robot(multiprocessing.Process):
         
         # Robot stats (will be stored in shared memory)
         self.F = random.randint(1, 10)  # Força
-        self.E = random.randint(10, 100)  # Energia  
+        self.E = random.randint(60, 100)  # Energia  
         self.V = random.randint(1, 5)  # Velocidade
         
         # Player control
@@ -493,7 +493,7 @@ class Robot(multiprocessing.Process):
                 break
     
     def housekeeping(self):
-        """Housekeeping thread - reduces energy periodically"""
+        """Housekeeping thread - reduces energy when robot moves"""
         while self.running:
             try:
                 time.sleep(1.0)  # Check every second
@@ -502,8 +502,7 @@ class Robot(multiprocessing.Process):
                     robot_data = self.shared_state.get_robot_data(self.id)
                     if robot_data and robot_data['status'] == 1:
                         # Reduce energy based on robot stats
-                        energy_loss = max(1, (robot_data['V'] + robot_data['F']) // 4)
-                        robot_data['E'] = max(0, robot_data['E'] - energy_loss)
+                        robot_data['E'] = max(0, robot_data['E'] - 0.5)
                         
                         # Check if robot dies
                         if robot_data['E'] <= 0:
@@ -810,7 +809,7 @@ def main(stdscr):
     
     try:
         # Show deadlock demonstration
-        demonstrate_deadlock()
+        #demonstrate_deadlock()
         
         # Create and initialize arena
         print("Creating robot arena with shared memory...")
@@ -826,6 +825,9 @@ def main(stdscr):
         # Main game loop with viewer
         print("Starting game... Use arrow keys to control player robot.")
         time.sleep(1)  # Give robots time to start
+        
+        # Enable non-blocking input so display updates in real-time
+        stdscr.nodelay(True)
         
         while True:
             # Update alive count and check game state
@@ -848,10 +850,11 @@ def main(stdscr):
                 stdscr.addstr(GRID_HEIGHT + 4, 0, winner_msg)
                 stdscr.addstr(GRID_HEIGHT + 5, 0, "Press any key to exit...")
                 stdscr.refresh()
+                stdscr.nodelay(False)  # Switch back to blocking for final input
                 stdscr.getch()  # Wait for key press
                 break
             
-            # Handle player input
+            # Handle player input (non-blocking)
             key = stdscr.getch()
             if key == curses.KEY_UP:
                 arena.set_player_direction(0, -1)
@@ -863,6 +866,7 @@ def main(stdscr):
                 arena.set_player_direction(1, 0)
             elif key == ord('q'):
                 break
+            # If key == -1, no key was pressed, which is fine - continue updating display
             
             # Update frequency control
             curses.napms(100)  # 100ms delay = ~10 FPS
