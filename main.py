@@ -1,14 +1,10 @@
-import os
 import sys
 import threading
 import multiprocessing
 import multiprocessing.shared_memory
-import queue
 import time
 import ctypes
 import struct
-import mmap
-
 import curses
 import random
 
@@ -885,69 +881,22 @@ def main(stdscr):
 def run_viewer_only():
     """Run standalone viewer (for testing)"""
     try:
-        shared_state = SharedGameState(create=False)  # Attach to existing
+        shared_locks = get_shared_locks()
+        shared_state = SharedGameState(create=False, shared_locks=shared_locks)
         viewer = Viewer(shared_state)
         curses.wrapper(viewer.run)
     except Exception as e:
         print(f"Viewer error: {e}")
 
-def test_shared_memory():
-    """Test shared memory implementation"""
-    print("Testing shared memory implementation...")
-    
-    try:
-        # Create shared state
-        shared_state = SharedGameState(create=True)
-        
-        # Test grid operations
-        shared_state.set_grid_cell(5, 5, 'T')
-        cell = shared_state.get_grid_cell(5, 5)
-        print(f"Grid test: Set 'T' at (5,5), got '{cell}'")
-        
-        # Test robot data
-        robot_data = {
-            'id': 0, 'x': 10, 'y': 10, 'F': 5, 'E': 50, 'V': 3, 'status': 1
-        }
-        shared_state.set_robot_data(0, robot_data)
-        retrieved_data = shared_state.get_robot_data(0)
-        print(f"Robot test: {retrieved_data}")
-        
-        # Test battery data
-        battery_data = {
-            'x': 15, 'y': 15, 'collected': 0, 'owner': -1
-        }
-        shared_state.set_battery_data(0, battery_data)
-        retrieved_battery = shared_state.get_battery_data(0)
-        print(f"Battery test: {retrieved_battery}")
-        
-        # Test flags
-        flags = {'init_done': 1, 'game_over': 0, 'winner': -1, 'alive_count': 4}
-        shared_state.set_flags(flags)
-        retrieved_flags = shared_state.get_flags()
-        print(f"Flags test: {retrieved_flags}")
-        
-        # Cleanup
-        shared_state.cleanup()
-        print("Shared memory test completed successfully!")
-        
-    except Exception as e:
-        print(f"Shared memory test failed: {e}")
-        import traceback
-        traceback.print_exc()
-
 if __name__ == "__main__":
-    import sys
-    
     # Set multiprocessing method for compatibility
     multiprocessing.set_start_method('spawn', force=True)
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == 'test':
-            test_shared_memory()
-        elif sys.argv[1] == 'viewer':
+        if sys.argv[1] == 'viewer':
             run_viewer_only()
         else:
-            print("Usage: python main.py [test|viewer]")
+            print("Usage: python main.py [viewer]")
     else:
         # Run main game
         curses.wrapper(main)
