@@ -745,7 +745,7 @@ class Viewer:
                     energy_info = f"Player Robot: Energy={player_data['E']}, Force={player_data['F']}, Velocity={player_data['V']}, Status={status}"
                     stdscr.addstr(GRID_HEIGHT + 1, 0, energy_info[:max_x-1])
                 other_robot_info = []
-                for robot_id in range(1, MAX_ROBOTS):
+                for robot_id in range(0, MAX_ROBOTS):
                     # print robot stats
                     robot_data = self.shared_state.get_robot_data(robot_id)
                     if robot_data and robot_data['status'] == 1:
