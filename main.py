@@ -744,6 +744,14 @@ class Viewer:
                     status = "alive" if player_data['status'] == 1 else "dead"
                     energy_info = f"Player Robot: Energy={player_data['E']}, Force={player_data['F']}, Velocity={player_data['V']}, Status={status}"
                     stdscr.addstr(GRID_HEIGHT + 1, 0, energy_info[:max_x-1])
+                other_robot_info = []
+                for robot_id in range(1, MAX_ROBOTS):
+                    # print robot stats
+                    robot_data = self.shared_state.get_robot_data(robot_id)
+                    if robot_data and robot_data['status'] == 1:
+                        other_robot_info.append(f" Robot {robot_id}: E={robot_data['E']}, F={robot_data['F']}, V={robot_data['V']} ")
+                if other_robot_info:
+                    stdscr.addstr(GRID_HEIGHT + 2, 0, " | ".join(other_robot_info)[:max_x-1])
         
         # Display game status
         if GRID_HEIGHT + 2 < max_y:
